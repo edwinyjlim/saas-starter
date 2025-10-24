@@ -1,0 +1,77 @@
+[
+  {
+    "eventName": "user_signed_up",
+    "description": "User creates a new account, optionally accepting a team invitation",
+    "filePath": "app/(login)/actions.ts"
+  },
+  {
+    "eventName": "user_signed_in",
+    "description": "User successfully signs in to their account",
+    "filePath": "app/(login)/actions.ts"
+  },
+  {
+    "eventName": "user_signed_out",
+    "description": "User signs out of their account",
+    "filePath": "app/(login)/actions.ts"
+  },
+  {
+    "eventName": "team_created",
+    "description": "New team is created during signup",
+    "filePath": "app/(login)/actions.ts"
+  },
+  {
+    "eventName": "invitation_accepted",
+    "description": "User accepts a team invitation during signup",
+    "filePath": "app/(login)/actions.ts"
+  },
+  {
+    "eventName": "team_member_invited",
+    "description": "Team owner invites a new member to the team",
+    "filePath": "app/(login)/actions.ts"
+  },
+  {
+    "eventName": "team_member_removed",
+    "description": "Team owner removes a member from the team",
+    "filePath": "app/(login)/actions.ts"
+  },
+  {
+    "eventName": "checkout_initiated",
+    "description": "User clicks to start subscription checkout process (top of funnel)",
+    "filePath": "app/(dashboard)/pricing/page.tsx"
+  },
+  {
+    "eventName": "checkout_session_created",
+    "description": "Stripe checkout session created successfully",
+    "filePath": "lib/payments/stripe.ts"
+  },
+  {
+    "eventName": "subscription_activated",
+    "description": "Subscription becomes active or enters trial period after successful checkout",
+    "filePath": "app/api/stripe/checkout/route.ts"
+  },
+  {
+    "eventName": "subscription_updated",
+    "description": "User modifies their subscription (upgrade/downgrade/cancel)",
+    "filePath": "lib/payments/stripe.ts"
+  },
+  {
+    "eventName": "customer_portal_accessed",
+    "description": "User accesses Stripe customer portal to manage subscription",
+    "filePath": "lib/payments/stripe.ts"
+  },
+  {
+    "eventName": "account_updated",
+    "description": "User updates their account information (name, email)",
+    "filePath": "app/(login)/actions.ts"
+  },
+  {
+    "eventName": "password_updated",
+    "description": "User successfully changes their password",
+    "filePath": "app/(login)/actions.ts"
+  },
+  {
+    "eventName": "account_deleted",
+    "description": "User deletes their account (churn event)",
+    "filePath": "app/(login)/actions.ts"
+  }
+]

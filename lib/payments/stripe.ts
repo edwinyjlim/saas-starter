@@ -6,9 +6,10 @@ import {
   getUser,
   updateTeamSubscription
 } from '@/lib/db/queries';
+import { getPostHogClient } from '@/lib/posthog-server';
 
 export const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2025-04-30.basil'
+  apiVersion: '2025-08-27.basil'
 });
 
 export async function createCheckoutSession({
@@ -42,6 +43,18 @@ export async function createCheckoutSession({
       trial_period_days: 14
     }
   });
+
+  const posthog = getPostHogClient();
+  posthog.capture({
+    distinctId: user.id.toString(),
+    event: 'checkout_session_created',
+    properties: {
+      priceId: priceId,
+      teamId: team.id,
+      sessionId: session.id
+    }
+  });
+  await posthog.shutdown();
 
   redirect(session.url!);
 }
@@ -107,6 +120,20 @@ export async function createCustomerPortalSession(team: Team) {
     });
   }
 
+  const user = await getUser();
+  const posthog = getPostHogClient();
+
+  if (user) {
+    posthog.capture({
+      distinctId: user.id.toString(),
+      event: 'customer_portal_accessed',
+      properties: {
+        teamId: team.id
+      }
+    });
+    await posthog.shutdown();
+  }
+
   return stripe.billingPortal.sessions.create({
     customer: team.stripeCustomerId,
     return_url: `${process.env.BASE_URL}/dashboard`,
@@ -128,8 +155,23 @@ export async function handleSubscriptionChange(
     return;
   }
 
+  const posthog = getPostHogClient();
+
   if (status === 'active' || status === 'trialing') {
     const plan = subscription.items.data[0]?.plan;
+
+    // Capture subscription update event
+    posthog.capture({
+      distinctId: customerId, // Using customerId as we may not have userId here
+      event: 'subscription_updated',
+      properties: {
+        teamId: team.id,
+        subscriptionId: subscriptionId,
+        status: status,
+        planName: (plan?.product as Stripe.Product).name
+      }
+    });
+
     await updateTeamSubscription(team.id, {
       stripeSubscriptionId: subscriptionId,
       stripeProductId: plan?.product as string,
@@ -137,6 +179,17 @@ export async function handleSubscriptionChange(
       subscriptionStatus: status
     });
   } else if (status === 'canceled' || status === 'unpaid') {
+    // Capture subscription cancellation/failure event
+    posthog.capture({
+      distinctId: customerId,
+      event: 'subscription_updated',
+      properties: {
+        teamId: team.id,
+        subscriptionId: subscriptionId,
+        status: status
+      }
+    });
+
     await updateTeamSubscription(team.id, {
       stripeSubscriptionId: null,
       stripeProductId: null,
@@ -144,6 +197,8 @@ export async function handleSubscriptionChange(
       subscriptionStatus: status
     });
   }
+
+  await posthog.shutdown();
 }
 
 export async function getStripePrices() {
