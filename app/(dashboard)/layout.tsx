@@ -14,6 +14,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { signOut } from '@/app/(login)/actions';
 import { useRouter } from 'next/navigation';
 import { User } from '@/lib/db/schema';
+import { PendoIdentify } from '@/components/pendo-identify';
 import useSWR, { mutate } from 'swr';
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json());
@@ -25,6 +26,9 @@ function UserMenu() {
 
   async function handleSignOut() {
     await signOut();
+    // Reset to a fresh anonymous visitor so the next user isn't tracked as
+    // this one. clearSession is only available once the agent has loaded.
+    pendo.clearSession?.();
     mutate('/api/user');
     router.push('/');
   }
@@ -99,6 +103,7 @@ function Header() {
 export default function Layout({ children }: { children: React.ReactNode }) {
   return (
     <section className="flex flex-col min-h-screen">
+      <PendoIdentify />
       <Header />
       {children}
     </section>
