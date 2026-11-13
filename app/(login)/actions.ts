@@ -21,6 +21,7 @@ import { redirect } from 'next/navigation';
 import { cookies } from 'next/headers';
 import { createCheckoutSession } from '@/lib/payments/stripe';
 import { getUser, getUserWithTeam } from '@/lib/db/queries';
+import { trackPendoEvent } from '@/lib/analytics/pendo';
 import {
   validatedAction,
   validatedActionWithUser
@@ -92,6 +93,19 @@ export const signIn = validatedAction(signInSchema, async (data, formData) => {
   ]);
 
   const redirectTo = formData.get('redirect') as string | null;
+
+  // Pendo: credentials verified and session started
+  await trackPendoEvent({
+    event: 'Signed in',
+    visitorId: foundUser.id,
+    accountId: foundTeam?.id,
+    properties: {
+      user_role: foundUser.role,
+      plan_name: foundTeam?.planName ?? 'Free',
+      redirect_to: redirectTo === 'checkout' ? 'checkout' : 'dashboard'
+    }
+  });
+
   if (redirectTo === 'checkout') {
     const priceId = formData.get('priceId') as string;
     return createCheckoutSession({ team: foundTeam, priceId });
@@ -144,6 +158,7 @@ export const signUp = validatedAction(signUpSchema, async (data, formData) => {
   let teamId: number;
   let userRole: string;
   let createdTeam: typeof teams.$inferSelect | null = null;
+  let acceptedInvitationId: number | null = null;
 
   if (inviteId) {
     // Check if there's a valid invitation
@@ -162,6 +177,7 @@ export const signUp = validatedAction(signUpSchema, async (data, formData) => {
     if (invitation) {
       teamId = invitation.teamId;
       userRole = invitation.role;
+      acceptedInvitationId = invitation.id;
 
       await db
         .update(invitations)
@@ -213,6 +229,40 @@ export const signUp = validatedAction(signUpSchema, async (data, formData) => {
   ]);
 
   const redirectTo = formData.get('redirect') as string | null;
+  const signUpMethod = acceptedInvitationId !== null ? 'invitation' : 'direct';
+
+  // Pendo: sign-up outcomes, sent once the user has joined their team
+  await Promise.all([
+    trackPendoEvent({
+      event: 'Account created',
+      visitorId: createdUser.id,
+      accountId: teamId,
+      properties: {
+        user_role: userRole,
+        sign_up_method: signUpMethod,
+        redirect_to: redirectTo === 'checkout' ? 'checkout' : 'dashboard'
+      }
+    }),
+    acceptedInvitationId !== null
+      ? trackPendoEvent({
+          event: 'Invitation accepted',
+          visitorId: createdUser.id,
+          accountId: teamId,
+          properties: {
+            invitation_id: acceptedInvitationId,
+            user_role: userRole
+          }
+        })
+      : trackPendoEvent({
+          event: 'Team created',
+          visitorId: createdUser.id,
+          accountId: teamId,
+          properties: {
+            user_role: userRole
+          }
+        })
+  ]);
+
   if (redirectTo === 'checkout') {
     const priceId = formData.get('priceId') as string;
     return createCheckoutSession({ team: createdTeam, priceId });
@@ -282,6 +332,16 @@ export const updatePassword = validatedActionWithUser(
       logActivity(userWithTeam?.teamId, user.id, ActivityType.UPDATE_PASSWORD)
     ]);
 
+    // Pendo: new password saved and logged
+    await trackPendoEvent({
+      event: 'Password changed',
+      visitorId: user.id,
+      accountId: userWithTeam?.teamId,
+      properties: {
+        user_role: user.role
+      }
+    });
+
     return {
       success: 'Password updated successfully.'
     };
@@ -333,6 +393,16 @@ export const deleteAccount = validatedActionWithUser(
         );
     }
 
+    // Pendo: account soft-deleted and removed from its team
+    await trackPendoEvent({
+      event: 'Account deleted',
+      visitorId: user.id,
+      accountId: userWithTeam?.teamId,
+      properties: {
+        user_role: user.role
+      }
+    });
+
     (await cookies()).delete('session');
     redirect('/sign-in');
   }
@@ -353,6 +423,17 @@ export const updateAccount = validatedActionWithUser(
       db.update(users).set({ name, email }).where(eq(users.id, user.id)),
       logActivity(userWithTeam?.teamId, user.id, ActivityType.UPDATE_ACCOUNT)
     ]);
+
+    // Pendo: new name and email saved and logged
+    await trackPendoEvent({
+      event: 'Account information updated',
+      visitorId: user.id,
+      accountId: userWithTeam?.teamId,
+      properties: {
+        name_changed: name !== user.name,
+        email_changed: email !== user.email
+      }
+    });
 
     return { name, success: 'Account updated successfully.' };
   }
@@ -386,6 +467,17 @@ export const removeTeamMember = validatedActionWithUser(
       user.id,
       ActivityType.REMOVE_TEAM_MEMBER
     );
+
+    // Pendo: membership deleted from the team and logged
+    await trackPendoEvent({
+      event: 'Team member removed',
+      visitorId: user.id,
+      accountId: userWithTeam.teamId,
+      properties: {
+        removed_member_id: memberId,
+        user_role: user.role
+      }
+    });
 
     return { success: 'Team member removed successfully' };
   }
@@ -437,19 +529,34 @@ export const inviteTeamMember = validatedActionWithUser(
     }
 
     // Create a new invitation
-    await db.insert(invitations).values({
-      teamId: userWithTeam.teamId,
-      email,
-      role,
-      invitedBy: user.id,
-      status: 'pending'
-    });
+    const [createdInvitation] = await db
+      .insert(invitations)
+      .values({
+        teamId: userWithTeam.teamId,
+        email,
+        role,
+        invitedBy: user.id,
+        status: 'pending'
+      })
+      .returning({ id: invitations.id });
 
     await logActivity(
       userWithTeam.teamId,
       user.id,
       ActivityType.INVITE_TEAM_MEMBER
     );
+
+    // Pendo: pending invitation saved for the team
+    await trackPendoEvent({
+      event: 'Invitation created',
+      visitorId: user.id,
+      accountId: userWithTeam.teamId,
+      properties: {
+        invitation_id: createdInvitation?.id,
+        invited_role: role,
+        user_role: user.role
+      }
+    });
 
     // TODO: Send invitation email and include ?inviteId={id} to sign-up URL
     // await sendInvitationEmail(email, userWithTeam.team.name, role)
