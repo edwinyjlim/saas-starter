@@ -5,6 +5,7 @@ import { setSession } from '@/lib/auth/session';
 import { NextRequest, NextResponse } from 'next/server';
 import { stripe } from '@/lib/payments/stripe';
 import Stripe from 'stripe';
+import { trackPendoEvent } from '@/lib/analytics/pendo';
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
@@ -67,8 +68,11 @@ export async function GET(request: NextRequest) {
     const userTeam = await db
       .select({
         teamId: teamMembers.teamId,
+        previousSubscriptionId: teams.stripeSubscriptionId,
+        previousPlanName: teams.planName,
       })
       .from(teamMembers)
+      .leftJoin(teams, eq(teamMembers.teamId, teams.id))
       .where(eq(teamMembers.userId, user[0].id))
       .limit(1);
 
@@ -87,6 +91,23 @@ export async function GET(request: NextRequest) {
         updatedAt: new Date(),
       })
       .where(eq(teams.id, userTeam[0].teamId));
+
+    // Pendo: team updated after a successful checkout. Skip when this
+    // subscription was already saved (for example, a reload of this URL).
+    if (userTeam[0].previousSubscriptionId !== subscriptionId) {
+      await trackPendoEvent({
+        event: 'Subscription started',
+        visitorId: user[0].id,
+        accountId: userTeam[0].teamId,
+        properties: {
+          plan_name: (plan.product as Stripe.Product).name,
+          previous_plan_name: userTeam[0].previousPlanName ?? 'Free',
+          subscription_status: subscription.status,
+          price_id: plan.id,
+          billing_interval: plan.recurring?.interval,
+        },
+      });
+    }
 
     await setSession(user[0]);
     return NextResponse.redirect(new URL('/dashboard', request.url));

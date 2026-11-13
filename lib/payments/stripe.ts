@@ -6,6 +6,9 @@ import {
   getUser,
   updateTeamSubscription
 } from '@/lib/db/queries';
+import { trackPendoEvent } from '@/lib/analytics/pendo';
+
+const TRIAL_PERIOD_DAYS = 14;
 
 export const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-04-30.basil'
@@ -39,7 +42,20 @@ export async function createCheckoutSession({
     client_reference_id: user.id.toString(),
     allow_promotion_codes: true,
     subscription_data: {
-      trial_period_days: 14
+      trial_period_days: TRIAL_PERIOD_DAYS
+    }
+  });
+
+  // Pendo: Checkout session created, about to redirect to Stripe
+  await trackPendoEvent({
+    event: 'Checkout session started',
+    visitorId: user.id,
+    accountId: team.id,
+    properties: {
+      price_id: priceId,
+      trial_period_days: TRIAL_PERIOD_DAYS,
+      current_plan_name: team.planName ?? 'Free',
+      has_stripe_customer: Boolean(team.stripeCustomerId)
     }
   });
 
@@ -130,12 +146,34 @@ export async function handleSubscriptionChange(
 
   if (status === 'active' || status === 'trialing') {
     const plan = subscription.items.data[0]?.plan;
+    const productId = plan?.product as string;
+    const planName = (plan?.product as Stripe.Product).name;
     await updateTeamSubscription(team.id, {
       stripeSubscriptionId: subscriptionId,
-      stripeProductId: plan?.product as string,
-      planName: (plan?.product as Stripe.Product).name,
+      stripeProductId: productId,
+      planName,
       subscriptionStatus: status
     });
+
+    // Pendo: only send when the plan or status actually changed, so repeated
+    // webhook deliveries for the same state don't fire the event again
+    if (
+      team.subscriptionStatus !== status ||
+      team.stripeProductId !== productId
+    ) {
+      await trackPendoEvent({
+        event: 'Subscription changed',
+        visitorId: 'system',
+        accountId: team.id,
+        properties: {
+          subscription_status: status,
+          previous_status: team.subscriptionStatus,
+          plan_name: planName,
+          previous_plan_name: team.planName,
+          product_changed: team.stripeProductId !== productId
+        }
+      });
+    }
   } else if (status === 'canceled' || status === 'unpaid') {
     await updateTeamSubscription(team.id, {
       stripeSubscriptionId: null,
@@ -143,6 +181,24 @@ export async function handleSubscriptionChange(
       planName: null,
       subscriptionStatus: status
     });
+
+    // Pendo: only send on the transition into an ended state, so repeated
+    // webhook deliveries don't fire the event again
+    if (
+      team.subscriptionStatus !== 'canceled' &&
+      team.subscriptionStatus !== 'unpaid'
+    ) {
+      await trackPendoEvent({
+        event: 'Subscription canceled',
+        visitorId: 'system',
+        accountId: team.id,
+        properties: {
+          subscription_status: status,
+          previous_status: team.subscriptionStatus,
+          previous_plan_name: team.planName
+        }
+      });
+    }
   }
 }
 
