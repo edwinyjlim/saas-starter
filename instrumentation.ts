@@ -1,0 +1,73 @@
+import { SeverityNumber } from '@opentelemetry/api-logs';
+import { OTLPLogExporter } from '@opentelemetry/exporter-logs-otlp-http';
+import { resourceFromAttributes } from '@opentelemetry/resources';
+import { BatchLogRecordProcessor, LoggerProvider } from '@opentelemetry/sdk-logs';
+
+const posthogKey = process.env.NEXT_PUBLIC_POSTHOG_KEY;
+const posthogHost = process.env.NEXT_PUBLIC_POSTHOG_HOST;
+
+const posthogLogExporter =
+  posthogKey && posthogHost
+    ? new OTLPLogExporter({
+        url: new URL('/i/v1/logs', posthogHost).toString(),
+        timeoutMillis: 2000,
+        headers: {
+          Authorization: `Bearer ${posthogKey}`,
+          'Content-Type': 'application/json'
+        }
+      })
+    : undefined;
+
+export const posthogLoggerProvider = posthogLogExporter
+  ? new LoggerProvider({
+      resource: resourceFromAttributes({
+        'service.name': 'saas-starter'
+      }),
+      processors: [
+        new BatchLogRecordProcessor({ exporter: posthogLogExporter })
+      ]
+    })
+  : undefined;
+
+export const posthogLog = posthogLoggerProvider?.getLogger('posthog-export');
+
+if (!posthogLoggerProvider && process.env.NODE_ENV !== 'production') {
+  const missingVariable = posthogKey
+    ? 'NEXT_PUBLIC_POSTHOG_HOST'
+    : 'NEXT_PUBLIC_POSTHOG_KEY';
+
+  console.warn(
+    `${missingVariable} variable required by PostHog is missing or un-configured, this causes events to be silently missed. This error stops appearing once ${missingVariable} is configured`
+  );
+}
+
+export function register() {}
+
+export function logCheckoutCompleted(
+  planName: string,
+  subscriptionStatus: string
+) {
+  posthogLog?.emit({
+    body: 'Stripe checkout completed',
+    severityNumber: SeverityNumber.INFO,
+    attributes: {
+      operation: 'stripe_checkout_completed',
+      plan_name: planName,
+      subscription_status: subscriptionStatus
+    }
+  });
+}
+
+export function logCheckoutFailed() {
+  posthogLog?.emit({
+    body: 'Stripe checkout processing failed',
+    severityNumber: SeverityNumber.ERROR,
+    attributes: {
+      operation: 'stripe_checkout_failed'
+    }
+  });
+}
+
+export function flushPostHogLogs() {
+  return posthogLoggerProvider?.forceFlush().catch(() => {});
+}
